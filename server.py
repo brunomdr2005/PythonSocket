@@ -1,85 +1,144 @@
 import socket
 import threading
 
-# Configuração do servidor
-HOST = 'localhost'
-PORT = 12345
+class DotsAndBoxes:
+    def __init__(self, size):
+        self.size = size
+        self.horizontal_lines = [[False for _ in range(size - 1)] for _ in range(size)]
+        self.vertical_lines = [[False for _ in range(size)] for _ in range(size - 1)]
+        self.scores = {1: 0, 2: 0}
+        self.current_player = 1
 
-# Tabuleiro inicial (3x3)
-board = [['.' for _ in range(3)] for _ in range(3)]
-current_player = 1
+    def print_board(self):
+        board_str = ""
+        for row in range(self.size):
+            # Imprimir pontos e linhas horizontais
+            for col in range(self.size - 1):
+                board_str += "o"
+                if self.horizontal_lines[row][col]:
+                    board_str += "---"
+                else:
+                    board_str += "   "
+            board_str += "o\n"  # Final da linha de pontos
+            
+            # Imprimir linhas verticais
+            if row < self.size - 1:
+                for col in range(self.size):
+                    if self.vertical_lines[row][col]:
+                        board_str += "|     "
+                    else:
+                        board_str += "      "
+                board_str += "\n"
+        
+        return board_str
 
-# Função para imprimir o tabuleiro
-def print_board():
-    board_str = ""
-    for row in board:
-        board_str += " ".join(row) + "\n"
-    return board_str
+    def check_box_completed(self, row, col):
+        # Verifica se uma caixa foi completada
+        if self.horizontal_lines[row][col] and self.horizontal_lines[row + 1][col] and \
+           self.vertical_lines[row][col] and self.vertical_lines[row][col + 1]:
+            return True
+        return False
 
-# Função para verificar se a jogada é válida
-def is_valid_move(row, col):
-    return 0 <= row < len(board) and 0 <= col < len(board[0]) and board[row][col] == '.'
+    def make_move(self, r1, c1, r2, c2):
+        if r1 == r2 and abs(c1 - c2) == 1:  # Linha horizontal
+            row = r1
+            col = min(c1, c2)
+            if self.horizontal_lines[row][col]:
+                return False, "Essa linha já foi marcada!"
+            self.horizontal_lines[row][col] = True
+        elif c1 == c2 and abs(r1 - r2) == 1:  # Linha vertical
+            row = min(r1, r2)
+            col = c1
+            if self.vertical_lines[row][col]:
+                return False, "Essa linha já foi marcada!"
+            self.vertical_lines[row][col] = True
+        else:
+            return False, "Movimento inválido!"
 
-# Função para verificar se o jogo terminou
-def is_game_over():
-    for row in board:
-        if '.' in row:
-            return False
-    return True
+        box_completed = False
+        for row in range(self.size - 1):
+            for col in range(self.size - 1):
+                if self.check_box_completed(row, col):
+                    self.scores[self.current_player] += 1
+                    box_completed = True
 
-# Função para lidar com as jogadas dos jogadores
-def handle_client(conn, player_num, opponent_conn):
-    global current_player
-    symbol = 'X' if player_num == 1 else 'O'
-    
-    conn.sendall(f"Bem-vindo, Jogador {player_num} ({symbol})!\n".encode())
+        # Se uma caixa foi completada, o jogador joga novamente
+        if not box_completed:
+            self.current_player = 2 if self.current_player == 1 else 1  # Troca de jogador
 
-    while True:
-        # Verifica se o jogo acabou
-        if is_game_over():
-            conn.sendall("Jogo finalizado!\n".encode())
-            opponent_conn.sendall("Jogo finalizado!\n".encode())
+        return True, "Jogada válida."
+
+    def game_over(self):
+        return all(all(row) for row in self.horizontal_lines) and all(all(row) for row in self.vertical_lines)
+
+def handle_client(client_socket, player_num, game, lock):
+    while not game.game_over():
+        try:
+            with lock:
+                if game.current_player == player_num:
+                    client_socket.send(f"\nTabuleiro atual:\n{game.print_board()}".encode())
+                    client_socket.send(f"Sua vez, Jogador {player_num}. Digite as coordenadas.\n".encode())
+                    
+                    client_socket.send("Digite a linha inicial: ".encode())
+                    r1 = client_socket.recv(1024).decode()
+                    client_socket.send("Digite a coluna inicial: ".encode())
+                    c1 = client_socket.recv(1024).decode()
+                    client_socket.send("Digite a linha final: ".encode())
+                    r2 = client_socket.recv(1024).decode()
+                    client_socket.send("Digite a coluna final: ".encode())
+                    c2 = client_socket.recv(1024).decode()
+
+                    if r1 and c1 and r2 and c2:
+                        try:
+                            r1, c1, r2, c2 = int(r1), int(c1), int(r2), int(c2)
+                            valid, message = game.make_move(r1, c1, r2, c2)
+                            client_socket.send(f"{message}\n".encode())
+                        except ValueError:
+                            client_socket.send("Erro: coordenadas inválidas.\n".encode())
+                    else:
+                        client_socket.send("Erro: coordenadas vazias.\n".encode())
+                else:
+                    client_socket.send("Aguarde o outro jogador...\n".encode())
+        except Exception as e:
+            print(f"Erro com o jogador {player_num}: {e}")
             break
 
-        if current_player == player_num:
-            conn.sendall(print_board().encode())
-            conn.sendall("Sua vez! Escolha linha e coluna (ex: 1,2):\n".encode())
-            move = conn.recv(1024).decode().strip()
+    # Mensagem de fim de jogo
+    winner = None
+    if game.scores[1] > game.scores[2]:
+        winner = 1
+    elif game.scores[2] > game.scores[1]:
+        winner = 2
 
-            try:
-                row, col = map(int, move.split(","))
-                if is_valid_move(row, col):
-                    # Atualiza o tabuleiro
-                    board[row][col] = symbol
-                    # Alterna o turno
-                    current_player = 2 if player_num == 1 else 1
-                    conn.sendall("Jogada válida!\n".encode())
-                    opponent_conn.sendall("Oponente jogou! Sua vez.\n".encode())
-                else:
-                    conn.sendall("Movimento inválido. Tente novamente.\n".encode())
-            except:
-                conn.sendall("Formato inválido. Use: linha,coluna (ex: 1,2)\n".encode())
-        else:
-            conn.sendall("Aguarde sua vez...\n".encode())
+    if winner:
+        client_socket.send(f"Fim do jogo! Jogador {winner} venceu!\n".encode())
+    else:
+        client_socket.send(f"Fim do jogo! Empate!\n".encode())
 
-    conn.close()
+    client_socket.send(f"Placar final:\nJogador 1: {game.scores[1]} | Jogador 2: {game.scores[2]}\n".encode())
+    client_socket.close()
 
-# Função principal do servidor
-def start_server():
+def server_program():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((HOST, PORT))
+    server.bind(('0.0.0.0', 5555))
     server.listen(2)
-    print("Servidor iniciado, aguardando conexões...")
+    print("Aguardando jogadores...")
 
-    # Aceita dois jogadores
-    conn1, addr1 = server.accept()
+    game = DotsAndBoxes(3)
+    lock = threading.Lock()
+
+    # Aceitar dois clientes
+    client1, addr1 = server.accept()
     print(f"Jogador 1 conectado de {addr1}")
-    conn2, addr2 = server.accept()
-    print(f"Jogador 2 conectado de {addr2}")
+    client1.send("Você é o Jogador 1\n".encode())
 
-    # Cria uma thread para cada jogador
-    threading.Thread(target=handle_client, args=(conn1, 1, conn2)).start()
-    threading.Thread(target=handle_client, args=(conn2, 2, conn1)).start()
+    client2, addr2 = server.accept()
+    print(f"Jogador 2 conectado de {addr2}")
+    client2.send("Você é o Jogador 2\n".encode())
+
+    # Criar threads para ambos os jogadores
+    threading.Thread(target=handle_client, args=(client1, 1, game, lock)).start()
+    threading.Thread(target=handle_client, args=(client2, 2, game, lock)).start()
 
 if __name__ == "__main__":
-    start_server()
+    server_program()
