@@ -1,23 +1,33 @@
 import socket
 
-HOST = 'localhost'
-PORT = 12345
+def client_program():
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.connect(('127.0.0.1', 5555))  # IP do servidor (localhost para testes locais)
 
-# Criação do socket TCP/IP
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    while True:
+        try:
+            # Receber mensagem do servidor
+            message = client.recv(1024).decode()
+            print(message)
 
-# Conecta ao servidor
-client.connect((HOST, PORT))
+            if "Fim do jogo" in message:
+                break  # Sair se o jogo terminar
 
-# Recebe e envia mensagens do servidor
-while True:
-    data = client.recv(1024).decode()
-    print(data)
+            # Se for a vez do jogador, solicitar as coordenadas
+            if "Sua vez" in message:
+                r1 = input("Digite a linha inicial: ")
+                client.send(r1.encode())
+                c1 = input("Digite a coluna inicial: ")
+                client.send(c1.encode())
+                r2 = input("Digite a linha final: ")
+                client.send(r2.encode())
+                c2 = input("Digite a coluna final: ")
+                client.send(c2.encode())
+        except Exception as e:
+            print(f"Erro: {e}")
+            break
 
-    if "Sua vez!" in data:
-        move = input("Digite sua jogada (linha,coluna): ")
-        client.sendall(move.encode())
-    elif "Jogo finalizado!" in data:
-        break
+    client.close()
 
-client.close()
+if __name__ == "__main__":
+    client_program()
